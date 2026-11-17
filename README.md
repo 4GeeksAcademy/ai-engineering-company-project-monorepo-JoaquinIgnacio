@@ -51,11 +51,12 @@ You are building **one company** across many milestones and projects. Each top-l
 
 ## Current status of the template
 
-> 💡 This repository currently provides a **base folder structure and documentation skeleton** only. It does not include runnable apps or global scripts yet.
+> 💡 El repositorio conserva su estructura de monorepo plantilla, y ahora incluye el entregable de lógica TypeScript de Nexova para el **Hito 2: Fundamentos de Programación**. No debe confundirse este módulo de dominio con una aplicación, API o integración empresarial desplegada.
 >
-> - `CONTEXT.md` is a placeholder and must be replaced with your assigned company context.
-> - There is no root `AGENTS.md` yet.
-> - Shared package metadata exists in `packages/shared/package.json` (`@repo/shared-types`), but no workspace runner is configured at root.
+> - `CONTEXT.md` contiene el contexto de Nexova; consúltalo como fuente primaria para los hechos de negocio.
+> - La raíz incluye `AGENTS.md`, `package.json`, `package-lock.json` y `tsconfig.json`. Los scripts disponibles son `npm run typecheck` y `npm test`.
+> - El Hito 2 está organizado bajo `src/` y tiene una suite permanente en `tests/`. Node.js v22.23.5 es la versión observada al documentar este estado; usa la versión indicada por el entorno de trabajo si difiere.
+> - `packages/shared/package.json` (`@repo/shared-types`) sigue presente, pero este entregable del Hito 2 no configura un workspace runner ni integra ese paquete.
 
 ---
 
@@ -296,6 +297,262 @@ ai-engineering-company-project-monorepo/
 
 - [4Geeks Academy — AI Engineering](https://4geeksacademy.com/es/programas-de-carrera/ingenieria-ia)
 - [How to start a coding project](https://4geeks.com/lesson/how-to-start-a-project)
+
+---
+
+## Nexova — Hito 2: Fundamentos de Programación
+
+Esta sección documenta el entregable de lógica de dominio para candidatos y vacantes descrito en el [briefing oficial de Nexova](https://github.com/4GeeksAcademy/ai-engineering-syllabus/blob/main/content/contexts/02-coding-fundamentals/nexova-BRIEFING.es.md). Implementa modelos, validación, operaciones de colección, búsquedas, scoring/ranking y agregaciones en TypeScript. Es lógica de programación pura: no incorpora IA, prompting, interfaz, API, persistencia ni integraciones empresariales.
+
+Para hechos y restricciones de negocio, consulta [`CONTEXT.md`](./CONTEXT.md). Los ejemplos y fixtures de pruebas usan datos ficticios. Los datos de candidatos reales son sensibles y no deben copiarse a ejemplos, tests o documentación.
+
+### Tecnologías y requisitos
+
+- **Node.js v22.23.5** fue la versión observada en el entorno al preparar esta documentación; npm observado: **10.9.9**. La versión instalada en otros entornos puede diferir.
+- **TypeScript** con `strict: true`, `target: ES2020`, `module: ESNext`, `moduleResolution: Bundler` y `noEmit: true` en [`tsconfig.json`](./tsconfig.json).
+- **Node.js `node:test`** y **`node:assert/strict`** para las pruebas; no se añade framework de testing.
+- [`package.json`](./package.json) declara `typecheck` y `test`; la única dependencia de desarrollo declarada es TypeScript (`^5.0.0`).
+- Las pruebas `.mjs` importan directamente los `.ts` mediante `--experimental-strip-types`, opción disponible en Node 22.
+
+### Estructura implementada para el hito
+
+```text
+.
+├── AGENTS.md
+├── CONTEXT.md
+├── README.md                       # Guía general y documentación Nexova Hito 2
+├── package.json                    # npm run typecheck y npm test
+├── package-lock.json
+├── tsconfig.json
+├── src/
+│   ├── types/
+│   │   └── models.ts               # Interfaces y tipos unión del dominio
+│   └── utils/
+│       ├── collections.ts          # Filtros y ordenamientos
+│       ├── search.ts               # Búsqueda lineal y binaria
+│       ├── transformations.ts      # Scoring, ranking y reportes
+│       └── validations.ts          # Reglas de candidato y vacante
+├── tests/
+│   ├── fixtures.mjs                # Datos ficticios compartidos
+│   ├── validations.test.mjs
+│   ├── collections.test.mjs
+│   ├── search.test.mjs
+│   ├── transformations.test.mjs
+│   └── integration.test.mjs
+└── memory-bank/
+  └── progress.md                 # Registro de trabajo y validaciones
+```
+
+El resto de las carpetas de nivel superior conserva las responsabilidades de la plantilla del monorepo; no son módulos funcionales del motor de candidatos por el hecho de aparecer en el árbol.
+
+### Modelos del dominio
+
+[`src/types/models.ts`](./src/types/models.ts) exporta tres interfaces y seis tipos unión:
+
+- `Candidate`: `id`, `fullName`, `email`, `phone`, `yearsOfExperience`, `skills`, `englishLevel`, `seniority`, `currentSalary`, `expectedSalary`, `availability`, `location`, `remoteOnly` y `status`. Los salarios se expresan en USD según el briefing.
+- `Vacancy`: `id`, `title`, `companyName`, `requiredSkills`, `preferredSkills`, `minYearsExperience`, `maxYearsExperience`, `requiredEnglishLevel`, `requiredSeniority`, `salaryRangeMin`, `salaryRangeMax`, `isRemote`, `location` y `status`. Los límites salariales se expresan en USD según el briefing.
+- `SelectionProcess`: `id`, `candidateId`, `vacancyId`, `stage`, `score`, `notes`, `createdAt` y `updatedAt` (`Date`).
+- `EnglishLevel`: `"A1" | "A2" | "B1" | "B2" | "C1" | "C2" | "Native"`.
+- `SeniorityLevel`: `"Junior" | "Semi-Senior" | "Senior" | "Lead" | "Executive"`.
+- `AvailabilityStatus`: `"Immediate" | "2 weeks" | "1 month" | "Not available"`.
+- `CandidateStatus`: `"Active" | "In process" | "Hired" | "Inactive"`.
+- `VacancyStatus`: `"Open" | "In progress" | "Closed" | "On hold"`.
+- `ProcessStage`: `"Screening" | "Interview" | "Technical test" | "Final interview" | "Offer" | "Rejected" | "Hired"`.
+
+Los tipos unión restringen los valores aceptados por TypeScript; no sustituyen la validación de datos en tiempo de ejecución.
+
+### API de utilidades
+
+#### Colecciones — `src/utils/collections.ts`
+
+- `filterCandidatesBySkills(candidates, requiredSkills)`: exige todas las habilidades requeridas, sin distinguir mayúsculas/minúsculas. Una lista vacía de requisitos no restringe el resultado.
+- `filterCandidatesBySeniority(candidates, seniority)`: coincidencia exacta de nivel.
+- `filterCandidatesByAvailability(candidates, availability)`: acepta cualquiera de las disponibilidades indicadas.
+- `sortCandidatesBySalary(candidates, order)` y `sortCandidatesByExperience(candidates, order)`: ordenan ascendente (`"asc"`) o descendente (`"desc"`) y devuelven un array nuevo; el salario se refiere a `expectedSalary`.
+
+#### Búsqueda — `src/utils/search.ts`
+
+- `findCandidateById(candidates, id)`: búsqueda lineal por ID exacto; devuelve `Candidate` o `null`.
+- `findCandidateByEmail(candidates, email)`: búsqueda lineal por email sin distinguir mayúsculas/minúsculas; devuelve `Candidate` o `null`.
+- `binarySearchCandidateBySalary(sortedCandidates, targetSalary)`: búsqueda binaria por `expectedSalary`; **requiere** entrada ya ordenada ascendentemente y devuelve el índice o `-1`. Con salarios duplicados puede devolver cualquier índice coincidente.
+
+#### Scoring, ranking y reportes — `src/utils/transformations.ts`
+
+- `calculateCandidateScore(candidate, vacancy)`: calcula el score conforme a los componentes del briefing:
+  - habilidades requeridas: 40 por todas, 20 por al menos la mitad y 0 en otro caso;
+  - habilidades preferidas: 10 por habilidad, hasta 20;
+  - experiencia: 20 dentro del rango, 10 a distancia de hasta dos años y 0 más lejos;
+  - seniority: 15 si coincide, 7 si es adyacente en la jerarquía y 0 si no;
+  - inglés: 15 si alcanza o supera el nivel requerido y 0 si no;
+  - salario esperado: 10 dentro del rango, 5 hasta 20% sobre el máximo y 0 fuera de esos casos.
+- `rankCandidatesForVacancy(candidates, vacancy)`: devuelve `{ candidate, score }[]` por puntuación descendente; en empate conserva el orden original de candidatos.
+- `groupCandidatesBySeniority(candidates)`: devuelve `Record<SeniorityLevel, Candidate[]>`, con clave para cada nivel, incluso si su grupo está vacío.
+- `countCandidatesByStatus(candidates)`: devuelve `Record<CandidateStatus, number>`, inicializando todos los estados en cero.
+- `calculateAverageSalary(candidates)`: media del salario esperado, redondeada a dos decimales.
+- `findTopSkills(candidates, topN)`: habilidades por frecuencia descendente; ignora diferencias de mayúsculas y cuenta cada habilidad como máximo una vez por candidato. Preserva la primera grafía observada y desempata alfabéticamente por nombre normalizado.
+- `calculateVacancyFillRate(processes)`: porcentaje (0–100) de procesos cuyo `stage` es exactamente `"Hired"`, redondeado a dos decimales.
+
+#### Validación — `src/utils/validations.ts`
+
+- `isValidEmail(email)`: comprobación deliberadamente básica: exige texto no vacío, una sola `@`, un punto después de `@`, contenido en ambos lados y ausencia de espacios. No es una validación de email de nivel producción.
+- `validateCandidate(candidate)`: devuelve `{ valid, errors }`; verifica experiencia finita entre 0 y 50 inclusive, salarios finitos mayores que cero, al menos una habilidad, email básico válido y teléfono no vacío.
+- `validateVacancy(vacancy)`: devuelve `{ valid, errors }`; verifica al menos una habilidad requerida, experiencia mínima finita no negativa, máxima finita y no menor que la mínima, salarios finitos positivos y máximo no menor que el mínimo.
+
+Las funciones de validación comprueban reglas del ejercicio, no la totalidad del esquema (por ejemplo, no validan cada campo textual opcional o cada valor de unión recibido desde una fuente externa). Conviene validar/esquematizar entradas externas con requisitos de producción específicos antes de utilizarlas.
+
+### Decisiones y límites conocidos
+
+- Los pesos máximos de los componentes del briefing suman **120**, aunque el resultado se describe como 0–100. La implementación conserva los pesos y limita el total final a 100; esto puede crear empates en 100. No es una normalización proporcional de los pesos.
+- El ranking usa el índice de entrada como desempate estable.
+- El briefing no define el resultado ante entradas vacías para salario promedio y fill rate. Como convención técnica, ambas funciones devuelven `0` para lista vacía.
+- La frecuencia de skills se cuenta por candidato, no por repeticiones internas de una misma lista. La primera capitalización se preserva solo para presentación; matching/agrupación de skills es case-insensitive donde se especifica.
+- Los ordenamientos no mutan el array recibido. Las funciones de transformación trabajan sobre parámetros y estructuras locales; no guardan estado global de candidatos.
+- La búsqueda binaria no comprueba ni ordena la entrada: incumplir su precondición de orden ascendente puede producir un resultado incorrecto.
+- Varias funciones de dominio reciben arrays y objetos tipados no nulos. El contrato no promete aceptar `null` como lista; las validaciones de candidato/vacante sí contienen una defensa ante un objeto superior nulo/no objeto en tiempo de ejecución.
+
+### Instalación, comprobaciones y pruebas
+
+Desde la raíz del repositorio, con Node.js y npm disponibles:
+
+```bash
+npm ci
+npm run typecheck
+npm test
+```
+
+`npm ci` instala las dependencias fijadas por `package-lock.json`. `npm run typecheck` ejecuta `tsc --noEmit`; `npm test` ejecuta la suite con el runner integrado de Node. Las pruebas cubren validaciones, filtros/ordenamientos, búsquedas, puntuación/ranking, agregados y un flujo de integración de extremo a extremo a nivel de funciones.
+
+**Verificación de esta revisión:** `npm run typecheck` terminó sin errores; `npm test` pasó **71 de 71 pruebas** (0 fallos, 0 canceladas, 0 omitidas). Se ejecutaron ambas órdenes después de `npm ci`. La suite actual consta de cinco archivos de pruebas (`*.test.mjs`) y un archivo de fixtures ficticios.
+
+> Nota: Node puede imprimir el aviso no bloqueante `MODULE_TYPELESS_PACKAGE_JSON` al importar TypeScript desde `.mjs`, dado que el paquete no declara `"type": "module"`. Debe informarse si aparece; no implica por sí mismo un fallo de pruebas.
+
+### Ejemplos TypeScript
+
+Los siguientes fragmentos son módulos TypeScript ilustrativos con imports relativos a archivos ubicados en la raíz. Todos los campos requeridos se completan y los datos son ficticios.
+
+#### Crear y validar candidato y vacante
+
+```typescript
+import type { Candidate, Vacancy } from "./src/types/models";
+import { validateCandidate, validateVacancy } from "./src/utils/validations";
+
+const candidate: Candidate = {
+  id: "C-DEMO-001",
+  fullName: "Alex Ejemplo",
+  email: "alex@example.test",
+  phone: "+34 600 000 001",
+  yearsOfExperience: 5,
+  skills: ["TypeScript", "Node.js", "React"],
+  englishLevel: "B2",
+  seniority: "Senior",
+  currentSalary: 50000,
+  expectedSalary: 58000,
+  availability: "2 weeks",
+  location: "Valencia, España",
+  remoteOnly: true,
+  status: "Active",
+};
+
+const vacancy: Vacancy = {
+  id: "V-DEMO-001",
+  title: "Desarrollador/a full-stack",
+  companyName: "Empresa Ejemplo",
+  requiredSkills: ["TypeScript", "Node.js"],
+  preferredSkills: ["React", "Docker"],
+  minYearsExperience: 3,
+  maxYearsExperience: 8,
+  requiredEnglishLevel: "B2",
+  requiredSeniority: "Senior",
+  salaryRangeMin: 50000,
+  salaryRangeMax: 65000,
+  isRemote: true,
+  location: "Valencia, España",
+  status: "Open",
+};
+
+console.log(validateCandidate(candidate)); // { valid: true, errors: [] }
+console.log(validateVacancy(vacancy)); // { valid: true, errors: [] }
+```
+
+#### Filtrar, ordenar, puntuar y rankear
+
+```typescript
+import {
+  filterCandidatesBySkills,
+  sortCandidatesBySalary,
+} from "./src/utils/collections";
+import {
+  calculateCandidateScore,
+  rankCandidatesForVacancy,
+} from "./src/utils/transformations";
+import type { Candidate, Vacancy } from "./src/types/models";
+
+declare const candidates: Candidate[]; // Poblado con registros validados.
+declare const vacancy: Vacancy;
+
+const matches = filterCandidatesBySkills(candidates, vacancy.requiredSkills);
+const byExpectedSalary = sortCandidatesBySalary(matches, "asc");
+const score = calculateCandidateScore(byExpectedSalary[0], vacancy);
+const ranking = rankCandidatesForVacancy(candidates, vacancy);
+
+console.log({ score, ranking }); // ranking: Array<{ candidate, score }>
+```
+
+#### Búsqueda y reportes
+
+```typescript
+import { findCandidateByEmail } from "./src/utils/search";
+import {
+  calculateAverageSalary,
+  countCandidatesByStatus,
+  findTopSkills,
+  groupCandidatesBySeniority,
+} from "./src/utils/transformations";
+import type { Candidate } from "./src/types/models";
+
+declare const candidates: Candidate[];
+
+const candidate = findCandidateByEmail(candidates, "ALEX@EXAMPLE.TEST");
+const groups = groupCandidatesBySeniority(candidates);
+const statusCounts = countCandidatesByStatus(candidates);
+const averageExpectedSalary = calculateAverageSalary(candidates);
+const topSkills = findTopSkills(candidates, 5);
+
+console.log({
+  candidate,
+  groups,
+  statusCounts,
+  averageExpectedSalary,
+  topSkills,
+});
+```
+
+### Suite permanente y matriz de cumplimiento
+
+Las pruebas están escritas con `node:test` y `node:assert/strict`. `tests/fixtures.mjs` fabrica candidatos, vacantes y procesos de selección ficticios. El conteo que debe considerarse vigente es el de una ejecución completa de `npm test` registrada durante la revisión, no un valor histórico.
+
+La matriz contrasta requisitos funcionales del briefing y criterios de aceptación. “Cumple” indica que hay implementación y evidencia de prueba apropiada para el contrato indicado; “Parcial” señala un límite o una dimensión no demostrada completamente por la suite. Los nombres de archivos de prueba citados contienen las comprobaciones pertinentes.
+
+| Requisito / criterio                                                                                               | Implementación: archivo y función/tipo                                                                 | Evidencia de prueba                                                                                                        | Estado y observaciones                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Modelos `Candidate`, `Vacancy`, `SelectionProcess`                                                                 | `src/types/models.ts` — tres interfaces                                                                | `tests/fixtures.mjs`; usos en los cinco `.test.mjs`                                                                        | **Cumple** — fixtures usan los campos del dominio y objetos tipados en TypeScript de producción.                                                                                                                                           |
+| Uniones `EnglishLevel`, `SeniorityLevel`, `AvailabilityStatus`, `CandidateStatus`, `VacancyStatus`, `ProcessStage` | `src/types/models.ts`                                                                                  | `tests/validations.test.mjs`, `tests/collections.test.mjs`, `tests/transformations.test.mjs`, `tests/integration.test.mjs` | **Cumple** — los valores del dominio se consumen en las funciones.                                                                                                                                                                         |
+| Reglas de validación de candidato y vacante; errores acumulados                                                    | `src/utils/validations.ts` — `validateCandidate`, `validateVacancy`                                    | `tests/validations.test.mjs`, `tests/integration.test.mjs`                                                                 | **Cumple** — incluye válido, límites, errores, entrada superior inválida y no mutación.                                                                                                                                                    |
+| Email básico                                                                                                       | `src/utils/validations.ts` — `isValidEmail`                                                            | `tests/validations.test.mjs`                                                                                               | **Cumple** — entradas válidas e inválidas, incluyendo forma, espacios y valores no string.                                                                                                                                                 |
+| Filtros por todas las skills (case-insensitive), seniority y disponibilidad                                        | `src/utils/collections.ts` — tres `filterCandidates*`                                                  | `tests/collections.test.mjs`, `tests/integration.test.mjs`                                                                 | **Cumple** — requisitos vacíos, coincidencia parcial, estados únicos/múltiples y casos normales.                                                                                                                                           |
+| Ordenamiento por salario y experiencia asc/desc sin mutar                                                          | `src/utils/collections.ts` — `sortCandidatesBySalary`, `sortCandidatesByExperience`                    | `tests/collections.test.mjs`, `tests/integration.test.mjs`                                                                 | **Cumple** — direcciones, empates, array vacío y no mutación (assert explícito en salario).                                                                                                                                                |
+| Búsqueda lineal por ID/email                                                                                       | `src/utils/search.ts` — `findCandidateById`, `findCandidateByEmail`                                    | `tests/search.test.mjs`, `tests/integration.test.mjs`                                                                      | **Cumple** — posiciones, ausencia, lista vacía y email case-insensitive.                                                                                                                                                                   |
+| Búsqueda binaria por salario esperado ascendente                                                                   | `src/utils/search.ts` — `binarySearchCandidateBySalary`                                                | `tests/search.test.mjs`                                                                                                    | **Cumple** — extremos, centro, no encontrado, vacío, singleton, duplicados y no mutación.                                                                                                                                                  |
+| Score por skills, experiencia, seniority, inglés y salario; rango 0–100                                            | `src/utils/transformations.ts` — `calculateCandidateScore`                                             | `tests/transformations.test.mjs`, `tests/integration.test.mjs`                                                             | **Cumple con decisión documentada** — se preservan pesos originales y se aplica tope 100 cuando el bruto excede ese rango.                                                                                                                 |
+| Ranking descendente con candidato y score                                                                          | `src/utils/transformations.ts` — `rankCandidatesForVacancy`                                            | `tests/transformations.test.mjs`, `tests/integration.test.mjs`                                                             | **Cumple** — orden, empate estable y entrada vacía.                                                                                                                                                                                        |
+| Grupos de todos los niveles y conteo de todos los estados                                                          | `src/utils/transformations.ts` — `groupCandidatesBySeniority`, `countCandidatesByStatus`               | `tests/transformations.test.mjs`, `tests/integration.test.mjs`                                                             | **Cumple** — claves y ceros para estados/grupos sin elementos.                                                                                                                                                                             |
+| Salario promedio, top skills y fill rate con redondeo/orden                                                        | `src/utils/transformations.ts` — `calculateAverageSalary`, `findTopSkills`, `calculateVacancyFillRate` | `tests/transformations.test.mjs`, `tests/integration.test.mjs`                                                             | **Cumple con convención documentada** — lista vacía retorna 0 para promedio y fill rate; skills deduplicadas por candidato y desempate alfabético.                                                                                         |
+| Type safety                                                                                                        | `src/types/models.ts`, `src/utils/*.ts`, `tsconfig.json` (`strict`)                                    | `npm run typecheck`                                                                                                        | **Cumple** — el typecheck de esta revisión terminó exitosamente.                                                                                                                                                                           |
+| Casos límite: arrays vacíos, nulos y datos inválidos                                                               | `src/utils/validations.ts`; funciones de arrays en `src/utils/*.ts`                                    | `tests/validations.test.mjs`, `tests/collections.test.mjs`, `tests/search.test.mjs`, `tests/transformations.test.mjs`      | **Parcial** — vacíos y entradas no objeto de validadores/búsquedas se prueban; la mayoría de APIs de colección/transformation exige arrays/objetos válidos según tipos y no ofrece contrato general para `null` o estructuras malformadas. |
+| Organización por responsabilidad y convenciones de nombres                                                         | `src/types/models.ts`, `src/utils/{validations,collections,search,transformations}.ts`                 | Inventario de código y suite `tests/*.test.mjs`                                                                            | **Cumple** — rutas y nombres corresponden a lo pedido.                                                                                                                                                                                     |
+| Funciones puras / sin estado global                                                                                | Funciones exportadas en `src/utils/*.ts`                                                               | `tests/validations.test.mjs`, `tests/collections.test.mjs`, `tests/search.test.mjs`, `tests/transformations.test.mjs`      | **Cumple** en código revisado — no hay estado global mutable; pruebas de no mutación explícitas cubren validadores, ordenamientos, búsqueda y ranking.                                                                                     |
+
+La matriz no sustituye criterios adicionales del evaluador ni afirma que el módulo esté desplegado en producción. “Parcial” en el contrato de entradas nulas/malformadas queda explícito para no prometer robustez no definida por los tipos o no cubierta universalmente por tests.
 
 ---
 
