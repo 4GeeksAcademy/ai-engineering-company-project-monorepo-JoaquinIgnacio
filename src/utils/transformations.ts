@@ -1,6 +1,9 @@
 import type {
+  CandidateStatus,
   Candidate,
   EnglishLevel,
+  ProcessStage,
+  SelectionProcess,
   SeniorityLevel,
   Vacancy,
 } from "../types/models";
@@ -120,4 +123,121 @@ export function rankCandidatesForVacancy(
         candidateA.originalIndex - candidateB.originalIndex,
     )
     .map(({ candidate, score }) => ({ candidate, score }));
+}
+
+/** Groups candidates by seniority, including empty arrays for every official level. */
+export function groupCandidatesBySeniority(
+  candidates: Candidate[],
+): Record<SeniorityLevel, Candidate[]> {
+  const emptyGroups: Record<SeniorityLevel, Candidate[]> = {
+    Junior: [],
+    "Semi-Senior": [],
+    Senior: [],
+    Lead: [],
+    Executive: [],
+  };
+
+  return candidates.reduce((groups, candidate) => {
+    groups[candidate.seniority].push(candidate);
+    return groups;
+  }, emptyGroups);
+}
+
+/** Counts candidates in each status, returning zero for statuses with no matches. */
+export function countCandidatesByStatus(
+  candidates: Candidate[],
+): Record<CandidateStatus, number> {
+  const initialCounts: Record<CandidateStatus, number> = {
+    Active: 0,
+    "In process": 0,
+    Hired: 0,
+    Inactive: 0,
+  };
+
+  return candidates.reduce((counts, candidate) => {
+    counts[candidate.status] += 1;
+    return counts;
+  }, initialCounts);
+}
+
+/**
+ * Returns the average expected salary rounded to two decimals. An empty list
+ * returns 0 as a technical convention because the briefing leaves that case undefined.
+ */
+export function calculateAverageSalary(candidates: Candidate[]): number {
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  const totalExpectedSalary = candidates.reduce(
+    (total, candidate) => total + candidate.expectedSalary,
+    0,
+  );
+  const averageExpectedSalary = totalExpectedSalary / candidates.length;
+
+  return Number(averageExpectedSalary.toFixed(2));
+}
+
+/**
+ * Counts distinct skills per candidate, ignoring case. The first spelling seen
+ * is kept for display, and equal counts are ordered alphabetically by normalized name.
+ */
+export function findTopSkills(
+  candidates: Candidate[],
+  topN: number,
+): { skill: string; count: number }[] {
+  if (candidates.length === 0 || topN <= 0) {
+    return [];
+  }
+
+  const skillCounts = candidates.reduce((counts, candidate) => {
+    const seenForCandidate = new Set<string>();
+
+    candidate.skills.forEach((skill) => {
+      const normalizedSkill = skill.toLowerCase();
+      if (seenForCandidate.has(normalizedSkill)) {
+        return;
+      }
+
+      seenForCandidate.add(normalizedSkill);
+      const current = counts.get(normalizedSkill);
+      if (current) {
+        current.count += 1;
+      } else {
+        counts.set(normalizedSkill, { skill, count: 1 });
+      }
+    });
+
+    return counts;
+  }, new Map<string, { skill: string; count: number }>());
+
+  return [...skillCounts.entries()]
+    .sort(([skillA, valueA], [skillB, valueB]) => {
+      if (valueB.count !== valueA.count) {
+        return valueB.count - valueA.count;
+      }
+      return skillA < skillB ? -1 : skillA > skillB ? 1 : 0;
+    })
+    .slice(0, topN)
+    .map(([, value]) => ({ ...value }));
+}
+
+/**
+ * Calculates the percentage of processes whose stage is exactly "Hired".
+ * An empty process list returns 0 because the briefing does not define that case.
+ */
+export function calculateVacancyFillRate(
+  processes: SelectionProcess[],
+): number {
+  if (processes.length === 0) {
+    return 0;
+  }
+
+  const hiredStage: ProcessStage = "Hired";
+  const hiredProcesses = processes.filter(
+    (process) => process.stage === hiredStage,
+  ).length;
+  const fillRate = (hiredProcesses / processes.length) * 100;
+
+  return Number(fillRate.toFixed(2));
 }
