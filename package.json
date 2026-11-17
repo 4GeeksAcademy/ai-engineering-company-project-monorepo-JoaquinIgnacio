@@ -1,0 +1,12 @@
+{
+  "name": "nexova-domain-models",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
